@@ -73,10 +73,17 @@ const indexRestaurant = async function (req, res) {
   try {
     const orders = await Order.findAll({
       where: whereClauses,
-      include: {
+      include: [{
         model: Product,
         as: 'products'
-      }
+      }, {
+        model: User,
+        as: 'user'
+      }],
+      order: [['deliveredAt', 'ASC'],
+        ['sentAt', 'ASC'],
+        ['startedAt', 'ASC'],
+        ['createdAt', 'ASC']]
     })
     res.json(orders)
   } catch (err) {
@@ -231,6 +238,70 @@ const analytics = async function (req, res) {
   }
 }
 
+const backwardOrder = async function (req, res) {
+  const transaction = await sequelizeSession.transaction()
+  try {
+    const order = await Order.findByPk(req.params.orderId, { transaction, lock: true })
+    if (order.status) {
+      switch (order.status) {
+        case 'in process':
+          order.startedAt = null
+          order.sentAt = null
+          order.deliveredAt = null
+          break
+        case 'sent':
+          order.sentAt = null
+          order.deliveredAt = null
+          break
+        case 'delivered':{
+          order.deliveredAt = null
+          break
+        }
+        case 'pending':
+          throw new Error('Cannot backward a pending order')
+      }
+    }
+    const updatedOrder = await order.save({ transaction })
+    await transaction.commit()
+    res.json(updatedOrder)
+  } catch (err) {
+    await transaction.rollback()
+    res.status(500).send(err)
+  }
+}
+
+const forwardOrder = async function (req, res) {
+  const transaction = await sequelizeSession.transaction()
+  try {
+    const order = await Order.findByPk(req.params.orderId, { transaction, lock: true })
+    if (order.status) {
+      switch (order.status) {
+        case 'pending':
+          order.startedAt = new Date()
+          order.sentAt = null
+          order.deliveredAt = null
+          break
+        case 'in process':
+          order.sentAt = new Date()
+          order.deliveredAt = null
+          break
+        case 'sent':{
+          order.deliveredAt = new Date()
+          break
+        }
+        case 'delivered':
+          throw new Error('Cannot forward a delivered order')
+      }
+    }
+    const updatedOrder = await order.save({ transaction })
+    await transaction.commit()
+    res.json(updatedOrder)
+  } catch (err) {
+    await transaction.rollback()
+    res.status(500).send(err)
+  }
+}
+
 const OrderController = {
   indexRestaurant,
   indexCustomer,
@@ -241,6 +312,8 @@ const OrderController = {
   send,
   deliver,
   show,
-  analytics
+  analytics,
+  backwardOrder,
+  forwardOrder
 }
 export default OrderController
